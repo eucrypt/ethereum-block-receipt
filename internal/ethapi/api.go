@@ -1201,6 +1201,70 @@ func (s *PublicBlockChainAPI) rpcMarshalBlock(ctx context.Context, b *types.Bloc
 	return fields, err
 }
 
+func (s *PublicTransactionPoolAPI) GetBlockReceipts(ctx context.Context, blockNr rpc.BlockNumber) ([]map[string]interface{}, error) {
+	block, err := s.b.BlockByNumber(ctx, blockNr)
+	if err != nil {
+		return nil, err
+	}
+	if block == nil {
+		return nil, nil
+	}
+
+	txs := block.Transactions()
+
+	receipts, err := s.b.GetReceipts(ctx, block.Hash())
+	if err != nil {
+		return nil, err
+	}
+
+	if len(receipts) != len(txs) {
+		return nil, fmt.Errorf("receipt and transaction count mismatch")
+	}
+
+	result := make([]map[string]interface{}, 0, len(receipts))
+
+	for index, receipt := range receipts {
+		tx := txs[index]
+		var signer types.Signer = types.FrontierSigner{}
+		if tx.Protected() {
+			signer = types.NewEIP155Signer(tx.ChainId())
+		}
+		from, _ := types.Sender(signer, tx)
+
+		fields := map[string]interface{}{
+			"blockHash":         block.Hash(),
+			"blockNumber":       hexutil.Uint64(blockNr),
+			"transactionHash":   receipt.TxHash,
+			"transactionIndex":  hexutil.Uint64(index),
+			"from":              from,
+			"to":                tx.To(),
+			"gasUsed":           hexutil.Uint64(receipt.GasUsed),
+			"cumulativeGasUsed": hexutil.Uint64(receipt.CumulativeGasUsed),
+			"contractAddress":   nil,
+			"logs":              receipt.Logs,
+			"logsBloom":         receipt.Bloom,
+		}
+
+		// Assign receipt status or post state.
+		if len(receipt.PostState) > 0 {
+			fields["root"] = hexutil.Bytes(receipt.PostState)
+		} else {
+			fields["status"] = hexutil.Uint(receipt.Status)
+		}
+		if receipt.Logs == nil {
+			fields["logs"] = [][]*types.Log{}
+		}
+		// If the ContractAddress is 20 0x0 bytes, assume it is not a contract creation
+		if receipt.ContractAddress != (common.Address{}) {
+			fields["contractAddress"] = receipt.ContractAddress
+		}
+
+		result = append(result, fields)
+	}
+
+	return result, nil
+}
+
 // RPCTransaction represents a transaction that will serialize to the RPC representation of a transaction
 type RPCTransaction struct {
 	BlockHash        *common.Hash      `json:"blockHash"`
